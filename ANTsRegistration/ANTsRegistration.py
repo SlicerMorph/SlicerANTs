@@ -202,7 +202,10 @@ class ANTsRegistrationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.outputInterpolationComboBox.connect(
             "currentIndexChanged(int)", self.updateParameterNodeFromGUI
         )
-        self.ui.outputTransformComboBox.connect(
+        self.ui.outputForwardTransformComboBox.connect(
+            "currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI
+        )
+        self.ui.outputInverseTransformComboBox.connect(
             "currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI
         )
         self.ui.outputVolumeComboBox.connect(
@@ -417,8 +420,11 @@ class ANTsRegistrationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         )
         self.updateStagesGUIFromParameter()
 
-        self.ui.outputTransformComboBox.setCurrentNode(
-            self._parameterNode.GetNodeReference(self.logic.params.OUTPUT_TRANSFORM_REF)
+        self.ui.outputForwardTransformComboBox.setCurrentNode(
+            self._parameterNode.GetNodeReference(self.logic.params.OUTPUT_FORWARD_TRANSFORM_REF)
+        )
+        self.ui.outputInverseTransformComboBox.setCurrentNode(
+            self._parameterNode.GetNodeReference(self.logic.params.OUTPUT_INVERSE_TRANSFORM_REF)
         )
         self.ui.outputVolumeComboBox.setCurrentNode(
             self._parameterNode.GetNodeReference(self.logic.params.OUTPUT_VOLUME_REF)
@@ -474,7 +480,8 @@ class ANTsRegistrationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self.ui.fixedImageNodeComboBox.currentNodeID
             and self.ui.movingImageNodeComboBox.currentNodeID
             and (
-                self.ui.outputTransformComboBox.currentNodeID
+                self.ui.outputForwardTransformComboBox.currentNodeID
+                or self.ui.outputInverseTransformComboBox.currentNodeID
                 or self.ui.outputVolumeComboBox.currentNodeID
             )
         )
@@ -536,8 +543,12 @@ class ANTsRegistrationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         )
 
         self._parameterNode.SetNodeReferenceID(
-            self.logic.params.OUTPUT_TRANSFORM_REF,
-            self.ui.outputTransformComboBox.currentNodeID,
+            self.logic.params.OUTPUT_FORWARD_TRANSFORM_REF,
+            self.ui.outputForwardTransformComboBox.currentNodeID,
+        )
+        self._parameterNode.SetNodeReferenceID(
+            self.logic.params.OUTPUT_INVERSE_TRANSFORM_REF,
+            self.ui.outputInverseTransformComboBox.currentNodeID,
         )
         self._parameterNode.SetNodeReferenceID(
             self.logic.params.OUTPUT_VOLUME_REF,
@@ -740,7 +751,8 @@ class ANTsRegistrationLogic(ITKANTsCommonLogic):
 
     @dataclass
     class params:
-        OUTPUT_TRANSFORM_REF = "OutputTransform"
+        OUTPUT_FORWARD_TRANSFORM_REF = "OutputForwardTransform"
+        OUTPUT_INVERSE_TRANSFORM_REF = "OutputInverseTransform"
         OUTPUT_VOLUME_REF = "OutputVolume"
         INITIAL_TRANSFORM_REF = "InitialTransform"
         OUTPUT_INTERPOLATION_PARAM = "OutputInterpolation"
@@ -796,8 +808,10 @@ class ANTsRegistrationLogic(ITKANTsCommonLogic):
         if not parameterNode.GetParameter(self.params.CURRENT_STAGE_PARAM):
             parameterNode.SetParameter(self.params.CURRENT_STAGE_PARAM, "0")
 
-        if not parameterNode.GetNodeReference(self.params.OUTPUT_TRANSFORM_REF):
-            parameterNode.SetNodeReferenceID(self.params.OUTPUT_TRANSFORM_REF, "")
+        if not parameterNode.GetNodeReference(self.params.OUTPUT_FORWARD_TRANSFORM_REF):
+            parameterNode.SetNodeReferenceID(self.params.OUTPUT_FORWARD_TRANSFORM_REF, "")
+        if not parameterNode.GetNodeReference(self.params.OUTPUT_INVERSE_TRANSFORM_REF):
+            parameterNode.SetNodeReferenceID(self.params.OUTPUT_INVERSE_TRANSFORM_REF, "")
         if not parameterNode.GetNodeReference(self.params.OUTPUT_VOLUME_REF):
             parameterNode.SetNodeReferenceID(self.params.OUTPUT_VOLUME_REF, "")
         if not parameterNode.GetParameter(self.params.OUTPUT_INTERPOLATION_PARAM):
@@ -877,8 +891,11 @@ class ANTsRegistrationLogic(ITKANTsCommonLogic):
             )
 
         parameters["outputSettings"] = {}
-        parameters["outputSettings"]["transform"] = paramNode.GetNodeReference(
-            self.params.OUTPUT_TRANSFORM_REF
+        parameters["outputSettings"]["forwardTransform"] = paramNode.GetNodeReference(
+            self.params.OUTPUT_FORWARD_TRANSFORM_REF
+        )
+        parameters["outputSettings"]["inverseTransform"] = paramNode.GetNodeReference(
+            self.params.OUTPUT_INVERSE_TRANSFORM_REF
         )
         parameters["outputSettings"]["volume"] = paramNode.GetNodeReference(
             self.params.OUTPUT_VOLUME_REF
@@ -951,8 +968,7 @@ class ANTsRegistrationLogic(ITKANTsCommonLogic):
         initial_itk_transform = itk.AffineTransform[precision_type, fixedImage.ndim].New()  # not wrapped for float in 5.3
         initial_itk_transform.SetIdentity()
         if "initialTransformNode" in initialTransformSettings:
-            print("Passing Slicer nodes to ITK filters is not yet implemented")
-            # initial_itk_transform = itkTransformFromTransformNode(initialTransformSettings["initialTransformNode"])
+            initial_itk_transform = itkTransformFromTransformNode(initialTransformSettings["initialTransformNode"])
         elif "initializationFeature" in initialTransformSettings:
             print("This initialization is not yet implemented")
             # use itk.CenteredTransformInitializer to construct initial transform
@@ -1040,11 +1056,13 @@ class ANTsRegistrationLogic(ITKANTsCommonLogic):
             slicer.app.processEvents()
             # TODO: update progress bar
 
-        outTransform = ants_reg.GetForwardTransform()
-        print(outTransform)
+        forwardTransform = ants_reg.GetForwardTransform()
+        inverseTransform = ants_reg.GetInverseTransform()
         slicer.app.processEvents()
-        if outputSettings["transform"] is not None:
-            transformNodeFromItkTransform(outTransform, outputSettings["transform"])
+        if outputSettings["forwardTransform"] is not None:
+            transformNodeFromItkTransform(forwardTransform, outputSettings["forwardTransform"])
+        if outputSettings["inverseTransform"] is not None:
+            transformNodeFromItkTransform(inverseTransform, outputSettings["inverseTransform"])
 
         if outputSettings["volume"] is not None:
             itkImage = ants_reg.GetWarpedMovingImage()
@@ -1143,7 +1161,8 @@ class ANTsRegistrationTest(ScriptedLoadableModuleTest):
         moving = sampleDataLogic.downloadMRBrainTumor2()
 
         initialTransform = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLinearTransformNode")
-        outputTransform = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLTransformNode")
+        outputForwardTransform = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLTransformNode")
+        outputInverseTransform = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLTransformNode")
         outputVolume = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
 
         logic = ANTsRegistrationLogic()
@@ -1159,9 +1178,9 @@ class ANTsRegistrationTest(ScriptedLoadableModuleTest):
             stage["levels"]["convergenceWindowSize"] = 5
 
         presetParameters["initialTransformSettings"]["initialTransformNode"] = initialTransform
-        presetParameters["outputSettings"]["transform"] = outputTransform
+        presetParameters["outputSettings"]["forwardTransform"] = outputForwardTransform
+        presetParameters["outputSettings"]["inverseTransform"] = outputInverseTransform
         presetParameters["outputSettings"]["volume"] = outputVolume
-        presetParameters["outputSettings"]["transform"] = None
         presetParameters["outputSettings"]["log"] = None
 
         logic.process(**presetParameters)
